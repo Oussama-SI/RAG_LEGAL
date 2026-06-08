@@ -1,11 +1,12 @@
 """
 نظام توليد العقود القانونية المغربية — Streamlit Community Cloud
-Architecture: Upload PDFs → ChromaDB in-memory → Groq API (gratuit) → DOCX export
+Architecture: Kaggle RAG Server (FastAPI+ngrok) + Groq API (génération) → DOCX export
 """
 
 import streamlit as st
 from groq import Groq
-import fitz  # PyMuPDF
+import requests
+import fitz  # PyMuPDF (upload PDF local optionnel)
 import chromadb
 from sentence_transformers import SentenceTransformer
 from docx import Document
@@ -229,6 +230,8 @@ def init_state():
         'chroma_client': None,
         'collection': None,
         'embed_model': None,
+        'kaggle_api_url': '',
+        'kaggle_status': {},
         'indexed_files': [],
         'last_contract': '',
         'last_contract_type': '',
@@ -241,24 +244,41 @@ def init_state():
 
 init_state()
 
-# ─── Load embedding model (cached) ───────────────────────────────────────────
-@st.cache_resource(show_spinner="تحميل نموذج التضمين...")
-def load_embed_model():
-    return SentenceTransformer('intfloat/multilingual-e5-large')
+# ─── Kaggle RAG API helpers ───────────────────────────────────────────────────
+def kaggle_health(api_url: str) -> dict:
+    """Vérifie que le serveur Kaggle est actif."""
+    try:
+        r = requests.get(f"{api_url}/health", timeout=8)
+        return r.json() if r.status_code == 200 else {}
+    except Exception:
+        return {}
 
-# ─── ChromaDB init (in-memory for Streamlit Cloud) ───────────────────────────
-def get_collection():
-    if st.session_state.chroma_client is None:
-        st.session_state.chroma_client = chromadb.Client()  # in-memory
-        try:
-            st.session_state.chroma_client.delete_collection('moroccan_contracts')
-        except Exception:
-            pass
-        st.session_state.collection = st.session_state.chroma_client.create_collection(
-            name='moroccan_contracts',
-            metadata={'hnsw:space': 'cosine'}
+def kaggle_retrieve(api_url: str, query: str, contract_type: str, n: int = 5) -> list:
+    """Appelle /retrieve sur le serveur Kaggle."""
+    try:
+        r = requests.post(
+            f"{api_url}/retrieve",
+            json={"query": query, "contract_type": contract_type, "n": n},
+            timeout=20
         )
-    return st.session_state.collection
+        if r.status_code == 200:
+            return r.json().get("chunks", [])
+    except Exception as e:
+        st.warning(f"RAG Kaggle non disponible: {e}")
+    return []
+
+def kaggle_generate(api_url: str, prompt: str) -> str | None:
+    """Appelle /generate sur le serveur Kaggle (LLM local GPU)."""
+    try:
+        r = requests.post(
+            f"{api_url}/generate",
+            json={"prompt": prompt, "max_new_tokens": 2500},
+            timeout=120
+        )
+        if r.status_code == 200:
+            return r.json().get("contract", "")
+    except Exception:
+        return None
 
 # ─── PDF parsing ──────────────────────────────────────────────────────────────
 def parse_pdf_bytes(pdf_bytes: bytes) -> str:
@@ -285,92 +305,16 @@ def detect_contract_type(text: str) -> str:
     best = max(scores, key=scores.get)
     return best if scores[best] >= 2 else 'عقد_عام'
 
-# ─── Index PDFs ───────────────────────────────────────────────────────────────
-def index_pdfs(uploaded_files):
-    embed_model = load_embed_model()
-    collection = get_collection()
+# ─── Index PDFs : délégué au serveur Kaggle ──────────────────────────────────
+# L'indexation se fait dans le notebook Kaggle (cellule 5).
+# Streamlit ne fait qu'appeler l'API /retrieve.
 
-    results = []
-    for uf in uploaded_files:
-        if uf.name in st.session_state.indexed_files:
-            results.append(f'⏭️ {uf.name} (déjà indexé)')
-            continue
-
-        pdf_bytes = uf.read()
-        text = parse_pdf_bytes(pdf_bytes)
-        if len(text) < 100:
-            results.append(f'⚠️ {uf.name} — texte trop court')
-            continue
-
-        ctype = detect_contract_type(text)
-        chunks = chunk_contract(text)
-        fhash = hashlib.md5(pdf_bytes).hexdigest()[:8]
-
-        texts_to_embed = [f'passage: {normalize_arabic(c["text"])}' for c in chunks]
-        embeddings = embed_model.encode(
-            texts_to_embed,
-            batch_size=8,
-            normalize_embeddings=True,
-            show_progress_bar=False
-        )
-
-        all_ids, all_docs, all_metas, all_embeds = [], [], [], []
-        for i, (chunk, emb) in enumerate(zip(chunks, embeddings)):
-            all_ids.append(f'{fhash}_{i}')
-            all_docs.append(chunk['text'])
-            all_metas.append({
-                'file': uf.name,
-                'contract_type': ctype,
-                'article': chunk['article'],
-                'chunk_index': i
-            })
-            all_embeds.append(emb.tolist())
-
-        BATCH = 50
-        for i in range(0, len(all_ids), BATCH):
-            collection.add(
-                ids=all_ids[i:i+BATCH],
-                documents=all_docs[i:i+BATCH],
-                metadatas=all_metas[i:i+BATCH],
-                embeddings=all_embeds[i:i+BATCH]
-            )
-
-        st.session_state.indexed_files.append(uf.name)
-        results.append(f'✅ {uf.name} — {ctype} — {len(chunks)} segments')
-
-    return results
-
-# ─── RAG retrieval ────────────────────────────────────────────────────────────
+# ─── RAG retrieval — délégué au serveur Kaggle ───────────────────────────────
 def retrieve(query: str, contract_type: str = None, n: int = 5) -> list:
-    collection = get_collection()
-    embed_model = load_embed_model()
-
-    total = collection.count()
-    if total == 0:
+    api_url = st.session_state.get('kaggle_api_url', '').rstrip('/')
+    if not api_url:
         return []
-
-    q_emb = embed_model.encode(
-        f'query: {normalize_arabic(query)}',
-        normalize_embeddings=True
-    ).tolist()
-
-    where = {'contract_type': contract_type} if contract_type and contract_type != 'عقد_عام' else None
-    n_real = min(n, total)
-
-    results = collection.query(
-        query_embeddings=[q_emb],
-        n_results=n_real,
-        where=where,
-        include=['documents', 'metadatas', 'distances']
-    )
-    return [
-        {'text': doc, 'meta': meta, 'score': round(1 - dist, 3)}
-        for doc, meta, dist in zip(
-            results['documents'][0],
-            results['metadatas'][0],
-            results['distances'][0]
-        )
-    ]
+    return kaggle_retrieve(api_url, query, contract_type or '', n)
 
 # ─── Build RAG prompt ─────────────────────────────────────────────────────────
 def build_rag_prompt(request: str, contract_type: str, info: dict, context_chunks: list) -> str:
@@ -631,51 +575,68 @@ def contract_to_docx_bytes(contract_text: str, title: str, contract_type: str) -
 with st.sidebar:
     st.markdown('<div class="sidebar-header">⚖️ نظام العقود المغربية</div>', unsafe_allow_html=True)
 
-    st.markdown("**مفتاح Groq API (مجاني)**")
+    # ── Groq API key ──
+    st.markdown("**🔑 مفتاح Groq API (مجاني)**")
     api_key = st.text_input(
-        "API Key",
-        type="password",
-        placeholder="gsk_...",
+        "Groq Key", type="password", placeholder="gsk_...",
         label_visibility="collapsed"
     )
     if api_key:
-        st.markdown('<span class="badge badge-green">✓ مفتاح مُدخل</span>', unsafe_allow_html=True)
+        st.markdown('<span class="badge badge-green">✓ مفتاح Groq مُدخل</span>', unsafe_allow_html=True)
 
     st.divider()
 
-    st.markdown("**📂 رفع ملفات المرجعية (PDF)**")
-    uploaded_pdfs = st.file_uploader(
-        "رفع عقود مرجعية",
-        type=['pdf'],
-        accept_multiple_files=True,
+    # ── Kaggle RAG server ──
+    st.markdown("**🖥️ خادم RAG — Kaggle (ngrok)**")
+    kaggle_url_input = st.text_input(
+        "URL ngrok",
+        value=st.session_state.get('kaggle_api_url', ''),
+        placeholder="https://xxxx-xx-xx.ngrok-free.app",
         label_visibility="collapsed"
     )
+    if kaggle_url_input != st.session_state.get('kaggle_api_url', ''):
+        st.session_state.kaggle_api_url = kaggle_url_input.rstrip('/')
+        st.session_state.kaggle_status = {}
 
-    if uploaded_pdfs:
-        if st.button("📥 فهرسة الملفات", use_container_width=True):
-            with st.spinner("جاري الفهرسة..."):
-                res = index_pdfs(uploaded_pdfs)
-            for r in res:
-                st.write(r)
+    if st.button("🔌 Tester la connexion", use_container_width=True):
+        url = st.session_state.get('kaggle_api_url', '')
+        if url:
+            with st.spinner("Vérification..."):
+                st.session_state.kaggle_status = kaggle_health(url)
+        else:
+            st.warning("Entrez l'URL ngrok d'abord")
 
-    # Status
-    collection = get_collection()
-    n_docs = collection.count()
-    st.markdown(f'<span class="badge badge-blue">📚 {n_docs} مقطع مفهرس</span>', unsafe_allow_html=True)
+    status = st.session_state.get('kaggle_status', {})
+    if status.get("status") == "ok":
+        st.markdown(f'<span class="badge badge-green">✓ Connecté — {status.get("chunks_indexed",0)} chunks indexés</span>', unsafe_allow_html=True)
+        if status.get("gpu_available"):
+            st.markdown('<span class="badge badge-gold">⚡ GPU Kaggle actif</span>', unsafe_allow_html=True)
+    elif status:
+        st.error("✗ Serveur non joignable — vérifiez l'URL et le notebook Kaggle")
+    else:
+        st.caption("Non connecté → RAG désactivé, génération sans contexte")
 
-    if st.session_state.indexed_files:
-        with st.expander(f"الملفات المفهرسة ({len(st.session_state.indexed_files)})"):
-            for f in st.session_state.indexed_files:
-                st.write(f"📄 {f}")
+    st.divider()
+
+    # ── Generation mode ──
+    st.markdown("**⚙️ Mode de génération**")
+    use_kaggle_llm = st.toggle(
+        "LLM Kaggle GPU (Qwen-7B)",
+        value=False,
+        help="Activé = génération via Qwen-7B sur Kaggle. Désactivé = Groq API cloud."
+    )
+    if use_kaggle_llm:
+        st.markdown('<span class="badge badge-gold">🖥️ Qwen-7B — Kaggle GPU</span>', unsafe_allow_html=True)
+    else:
+        st.markdown('<span class="badge badge-blue">☁️ Groq API — cloud</span>', unsafe_allow_html=True)
 
     st.divider()
     st.markdown("""
     <small style="color:#888; font-family:'Cairo',sans-serif; direction:rtl; display:block;">
-    يعمل هذا النظام بـ:<br>
-    • Groq API (مجاني، سريع جداً)<br>
-    • ChromaDB (in-memory)<br>
-    • multilingual-e5-large<br>
-    • PyMuPDF + python-docx
+    <b>Architecture:</b><br>
+    📡 RAG ← Kaggle FastAPI + ngrok<br>
+    🤖 LLM ← Groq (cloud) ou Kaggle GPU<br>
+    📄 Export ← python-docx RTL
     </small>
     """, unsafe_allow_html=True)
 
@@ -730,9 +691,7 @@ with generate_col:
 
 # ─── Generation ───────────────────────────────────────────────────────────────
 if generate_btn:
-    if not api_key:
-        st.error("⚠️ الرجاء إدخال مفتاح Groq API في الشريط الجانبي.")
-    elif not user_request.strip():
+    if not user_request.strip():
         st.error("⚠️ الرجاء كتابة متطلبات العقد.")
     else:
         with st.spinner("🔍 استرجاع السياق من قاعدة البيانات..."):
@@ -744,10 +703,29 @@ if generate_btn:
             rag_info += f" (أفضل تشابه: {best_score:.0%})"
         st.info(rag_info)
 
-        with st.spinner("⚙️ جاري توليد العقد بواسطة Claude..."):
+        prompt = build_rag_prompt(user_request, contract_type, info, context)
+
+        if use_kaggle_llm:
+            spinner_msg = "⚙️ جاري توليد العقد عبر Kaggle GPU (Qwen-7B)..."
+        else:
+            spinner_msg = "⚙️ جاري توليد العقد عبر Groq API..."
+
+        with st.spinner(spinner_msg):
             try:
-                prompt = build_rag_prompt(user_request, contract_type, info, context)
-                contract_text = generate_contract_groq(prompt, api_key)
+                if use_kaggle_llm:
+                    kaggle_url = st.session_state.get('kaggle_api_url', '')
+                    if not kaggle_url:
+                        st.error("⚠️ URL Kaggle non configurée — désactivez le toggle ou entrez l'URL.")
+                        st.stop()
+                    contract_text = kaggle_generate(kaggle_url, prompt)
+                    if not contract_text:
+                        st.error("Le serveur Kaggle n'a pas répondu. Vérifiez que le notebook tourne.")
+                        st.stop()
+                else:
+                    if not api_key:
+                        st.error("⚠️ الرجاء إدخال مفتاح Groq API في الشريط الجانبي.")
+                        st.stop()
+                    contract_text = generate_contract_groq(prompt, api_key)
                 st.session_state.last_contract = contract_text
                 st.session_state.last_contract_type = contract_type
                 st.session_state.last_metrics = evaluate_contract_quality(contract_text, contract_type)
