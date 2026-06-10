@@ -7,8 +7,8 @@ import streamlit as st
 from groq import Groq
 import requests
 import fitz  # PyMuPDF (upload PDF local optionnel)
-import chromadb
-from sentence_transformers import SentenceTransformer
+# import chromadb
+# from sentence_transformers import SentenceTransformer
 from docx import Document
 from docx.shared import Pt, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -19,6 +19,8 @@ import re
 import io
 import hashlib
 import os
+
+from env_conf import init_state
 
 # ─── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -173,7 +175,15 @@ SYSTEM_PROMPT = """أنت محامٍ مغربي متخصص في صياغة ال�
 ٧. اختم بخانة التوقيع: الطرف الأول والطرف الثاني والتاريخ والمكان
 ٨. أضف بند الفسخ وبند الاختصاص القضائي دائماً
 ٩. لا تضف أي تعليق أو شرح خارج نص العقد
-١٠. اكتب العقد كاملاً بجميع بنوده دون اختصار"""
+١٠. اكتب العقد كاملاً بجميع بنوده دون اختصار
+
+قواعد إلزامية:
+- لا تضع أي تحليل داخلي أو تعليقات
+- لا تستخدم <think> أو أي علامات خاصة
+- اكتب العقد مباشرة بدون أي مقدمة
+- لا تستخدم علامات التنسيق مثل **
+- اكتب النص العربي فقط
+"""
 
 # ─── Arabic text utilities ────────────────────────────────────────────────────
 def normalize_arabic(text: str) -> str:
@@ -225,24 +235,7 @@ def chunk_contract(text: str, max_size: int = 1200, min_size: int = 150) -> list
     return chunks
 
 # ─── Session state init ───────────────────────────────────────────────────────
-def init_state():
-    defaults = {
-        'chroma_client': None,
-        'collection': None,
-        'embed_model': None,
-        'kaggle_api_url': '',
-        'kaggle_status': {},
-        'indexed_files': [],
-        'last_contract': '',
-        'last_contract_type': '',
-        'last_metrics': {},
-        'generation_history': [],
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
-
-init_state()
+init_state = init_state(st)
 
 # ─── Kaggle RAG API helpers ───────────────────────────────────────────────────
 def kaggle_health(api_url: str) -> dict:
@@ -348,7 +341,8 @@ def build_rag_prompt(request: str, contract_type: str, info: dict, context_chunk
 def generate_contract_groq(prompt: str, api_key: str) -> str:
     client = Groq(api_key=api_key)
     chat_completion = client.chat.completions.create(
-        model="qwen-qwq-32b",   # Excellent arabe, gratuit sur Groq
+        # model="qwen/qwen3-32b",
+        model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user",   "content": prompt},
@@ -406,8 +400,13 @@ def set_arabic_font(run, size=12, bold=False, color=None, italic=False):
     run.font.size = Pt(size)
     run.font.bold = bold
     run.font.italic = italic
-    if color:
+    # if color:
+    #     run.font.color.rgb = RGBColor(*color)
+    if color is None:
+        run.font.color.rgb = RGBColor(0, 0, 0)  # Noir
+    else:
         run.font.color.rgb = RGBColor(*color)
+
     rPr = run._r.get_or_add_rPr()
     rFonts = OxmlElement('w:rFonts')
     rFonts.set(qn('w:ascii'), 'Times New Roman')
@@ -483,18 +482,43 @@ def contract_to_docx_bytes(contract_text: str, title: str, contract_type: str) -
 
     # ── Contract body ──
     lines = contract_text.split('\n')
-    skip_headers = {'بسم الله الرحمن الرحيم', 'المملكة المغربية'}
+    # skip_headers = {'بسم الله الرحمن الرحيم', 'المملكة المغربية'}
+
+    # for line in lines:
+    #     line = line.strip()
+    #     if not line:
+    #         sp = doc.add_paragraph()
+    #         sp.paragraph_format.space_before = Pt(2)
+    #         sp.paragraph_format.space_after  = Pt(2)
+    #         continue
+
+    #     # Skip duplicate headers already in our template
+    #     if any(h in line for h in skip_headers) and lines.index(line) < 10:
+    #         continue
+    skip_headers = ['بسم الله الرحمن الرحيم', 'المملكة المغربية']
+
+    # Compter combien de fois chaque header apparaît
+    header_count = {'بسم الله الرحمن الرحيم': 0, 'المملكة المغربية': 0}
 
     for line in lines:
+        original_line = line
         line = line.strip()
         if not line:
             sp = doc.add_paragraph()
             sp.paragraph_format.space_before = Pt(2)
-            sp.paragraph_format.space_after  = Pt(2)
+            sp.paragraph_format.space_after = Pt(2)
             continue
 
-        # Skip duplicate headers already in our template
-        if any(h in line for h in skip_headers) and lines.index(line) < 10:
+        # Skip duplicate headers (garder seulement la première occurrence)
+        skip = False
+        for h in skip_headers:
+            if h in line:
+                header_count[h] += 1
+                if header_count[h] > 1:
+                    skip = True
+                break
+        
+        if skip:
             continue
 
         p = doc.add_paragraph()
@@ -621,7 +645,7 @@ with st.sidebar:
     # ── Generation mode ──
     st.markdown("**⚙️ Mode de génération**")
     use_kaggle_llm = st.toggle(
-        "LLM Kaggle GPU (Qwen-7B)",
+        "LLM Kaggle GPU (Qwen-32)",
         value=False,
         help="Activé = génération via Qwen-7B sur Kaggle. Désactivé = Groq API cloud."
     )
