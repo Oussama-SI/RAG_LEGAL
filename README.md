@@ -1,52 +1,4 @@
-# ⚖️ نظام توليد العقود القانونية المغربية
-
-Application Streamlit de génération de contrats marocains en arabe, propulsée par **Groq API (gratuit, ultra-rapide)** + `Qwen-QwQ-32B` et une architecture RAG.
-
-## Architecture
-
-```
-PDFs uploadés → PyMuPDF (parsing RTL) → ChromaDB in-memory (embeddings)
-                                              ↓
-        Requête → RAG retrieval → Groq (Qwen-QwQ-32B) → Contrat + DOCX
-```
-
-| Composant        | Technologie                   | Coût                    |
-| ---------------- | ----------------------------- | ----------------------- |
-| Parsing PDF      | PyMuPDF                       | Gratuit                 |
-| Embeddings       | `multilingual-e5-large` (CPU) | Gratuit                 |
-| Base vectorielle | ChromaDB in-memory            | Gratuit                 |
-| LLM              | **Qwen-QwQ-32B via Groq**     | **Gratuit** (free tier) |
-| Export           | python-docx                   | Gratuit                 |
-| Hébergement      | Streamlit Community Cloud     | **Gratuit**             |
-
-## Obtenir une clé Groq API (gratuit, 2 minutes)
-
-1. Aller sur [console.groq.com](https://console.groq.com)
-2. Se connecter (Google ou GitHub)
-3. **API Keys** → **"Create API Key"**
-4. Copier la clé (commence par `gsk_...`)
-5. **Aucune carte bancaire requise** ✅
-
-Free tier : ~14 400 requêtes/jour, 6000 tokens/min sur Qwen-QwQ-32B.
-
-## Déploiement Streamlit Community Cloud
-
-La clé Groq se saisit dans la sidebar de l'app — pas besoin de secrets.
-
-## Types de contrats supportés
-
-- 🏠 عقد كراء سكني (Loi 67.12)
-- 📜 عقد البيع (Z.O.C. art. 478-618)
-- 💼 عقد الشغل (Code du travail 65.99)
-- 🤝 عقد الشركة (Loi 5.96)
-- 🏗️ عقد المقاولة (Z.O.C. art. 723-769)
-- 💰 عقد القرض (Z.O.C. art. 860-877)
-
-## Note légale
-
-Les contrats générés sont des modèles à titre indicatif. Validation par un professionnel du droit marocain requise.
-
-# نظام توليد العقود القانونية المغربية
+# ⚖️ نظام العقود القانونية المغربية
 
 ## Moroccan Legal Contract Generator
 
@@ -241,57 +193,6 @@ Copier ce texte dans le champ "متطلبات العقد" :
 
 ---
 
-## Structure du projet
-
-contract-generator/
-|
-├── app.py
-├── requirements.txt
-├── README.md
-|
-└── contract-rag.ipynb (optionnel)
-
----
-
-## Dependances
-
-Contenu du fichier requirements.txt :
-
-streamlit==1.35.0
-groq==0.9.0
-requests==2.31.0
-pymupdf==1.24.0
-python-docx==1.1.0
-protobuf==3.20.3
-sentence-transformers==2.2.2
-chromadb==0.4.15
-
----
-
-## Depannage
-
-Erreur : ModuleNotFoundError
-
-pip install -r requirements.txt
-
-Erreur : protobuf conflict
-
-pip install protobuf==3.20.3
-
-Erreur : chroma-hnswlib compilation fails (Windows)
-
-pip install chromadb==0.4.15
-
-Erreur : RAG non connecte
-
-Verifier que le notebook Kaggle tourne et que l'URL ngrok est correcte
-
-Erreur : texte blanc dans DOCX
-
-La couleur du texte a ete forcee en noir dans la fonction set_arabic_font
-
----
-
 ## Note legale
 
 Les contrats generes sont des modeles a titre indicatif.
@@ -299,11 +200,5 @@ Les contrats generes sont des modeles a titre indicatif.
 Pour un usage officiel, une validation par un professionnel du droit marocain (avocat, notaire) est requise.
 
 L'application n'est pas responsable de l'utilisation des contrats generes.
-
----
-
-## Licence
-
-MIT
 
 ---
