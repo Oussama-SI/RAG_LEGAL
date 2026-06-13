@@ -2,5 +2,6 @@ app/venv
 app/.env
 app/__pycache__
 app/kaggle*
+app/rabishe.py
 
 *old*
