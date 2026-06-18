@@ -1,32 +1,32 @@
 import re
 import requests
-import fitz  # PyMuPDF (upload PDF local optionnel)
+#import fitz   PyMuPDF (upload PDF local optionnel)
 
 
 #  ─── PDF parsing ──────────────────────────────────────────────────────────────
-def parse_pdf_bytes(pdf_bytes: bytes) -> str:
-    doc = fitz.open(stream=pdf_bytes, filetype='pdf')
-    pages = []
-    for i, page in enumerate(doc):
-        text = page.get_text('text', flags=fitz.TEXT_PRESERVE_WHITESPACE)
-        if text.strip():
-            pages.append(f'[صفحة {i+1}]\n{text}')
-    doc.close()
-    return clean_pdf_text('\n\n'.join(pages))
+# def parse_pdf_bytes(pdf_bytes: bytes) -> str:
+#     doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+#     pages = []
+#     for i, page in enumerate(doc):
+#         text = page.get_text('text', flags=fitz.TEXT_PRESERVE_WHITESPACE)
+#         if text.strip():
+#             pages.append(f'[صفحة {i+1}]\n{text}')
+#     doc.close()
+#     return clean_pdf_text('\n\n'.join(pages))
 
-def detect_contract_type(text: str) -> str:
-    CONTRACT_KEYWORDS = {
-        'عقد_إيجار':  ['إيجار', 'مستأجر', 'مؤجر', 'أجرة', 'كراء', 'مكتري', 'مكري'],
-        'عقد_بيع':    ['بيع', 'مشتري', 'بائع', 'ثمن', 'ملكية', 'شراء'],
-        'عقد_عمل':    ['عمل', 'عامل', 'صاحب العمل', 'راتب', 'أجر', 'توظيف', 'أجير', 'مشغل'],
-        'عقد_شراكة':  ['شراكة', 'شريك', 'حصة', 'أرباح', 'خسائر', 'شركة'],
-        'عقد_مقاولة': ['مقاولة', 'مقاول', 'أشغال', 'بناء', 'تشييد'],
-        'عقد_قرض':    ['قرض', 'مقترض', 'مقرض', 'فائدة', 'دين', 'سلفة'],
-    }
-    sample = normalize_arabic(text[:3000])
-    scores = {t: sum(kw in sample for kw in kws) for t, kws in CONTRACT_KEYWORDS.items()}
-    best = max(scores, key=scores.get)
-    return best if scores[best] >= 2 else 'عقد_عام'
+# def detect_contract_type(text: str) -> str:
+#     CONTRACT_KEYWORDS = {
+#         'عقد_إيجار':  ['إيجار', 'مستأجر', 'مؤجر', 'أجرة', 'كراء', 'مكتري', 'مكري'],
+#         'عقد_بيع':    ['بيع', 'مشتري', 'بائع', 'ثمن', 'ملكية', 'شراء'],
+#         'عقد_عمل':    ['عمل', 'عامل', 'صاحب العمل', 'راتب', 'أجر', 'توظيف', 'أجير', 'مشغل'],
+#         'عقد_شراكة':  ['شراكة', 'شريك', 'حصة', 'أرباح', 'خسائر', 'شركة'],
+#         'عقد_مقاولة': ['مقاولة', 'مقاول', 'أشغال', 'بناء', 'تشييد'],
+#         'عقد_قرض':    ['قرض', 'مقترض', 'مقرض', 'فائدة', 'دين', 'سلفة'],
+#     }
+#     sample = normalize_arabic(text[:3000])
+#     scores = {t: sum(kw in sample for kw in kws) for t, kws in CONTRACT_KEYWORDS.items()}
+#     best = max(scores, key=scores.get)
+#     return best if scores[best] >= 2 else 'عقد_عام'
 
 
 # ─── Arabic text utilities ────────────────────────────────────────────────────
