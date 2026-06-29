@@ -1,0 +1,8 @@
+{
+  "id": "deoussama/contract-rag",
+  "title": "contract_rag",
+  "code_file": "notebook.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "accelerator": "gpu"
+}
