@@ -1,0 +1,39 @@
+name: Run Kaggle Contract RAG
+
+on:
+     workflow_dispatch:
+
+jobs:
+     run-kaggle:
+          runs-on: ubuntu-latest
+
+          steps:
+               - name: Checkout repo
+                 uses: actions/checkout@v4
+
+               - name: Install Kaggle CLI
+                 run: pip install kaggle
+
+               - name: Setup Kaggle API
+                 run: |
+                      mkdir -p ~/.kaggle
+                      echo "${{ secrets.KAGGLE_JSON }}" > ~/.kaggle/kaggle.json
+                      chmod 600 ~/.kaggle/kaggle.json
+
+               - name: Push Kaggle notebook
+                 run: |
+                      kaggle kernels push -p contract-rag
+
+               - name: Wait for execution
+                 run: sleep 260
+
+               - name: Fetch output
+                 run: |
+                      kaggle kernels output Oussama-SI/contract-rag -p output
+
+               - name: Extract ngrok URL
+                 run: |
+                      echo "NGROK_URL=$(cat output/ngrok_url.txt)" >> $GITHUB_ENV
+
+               - name: Show URL
+                 run: echo "Ngrok URL = ${{ env.NGROK_URL }}"
