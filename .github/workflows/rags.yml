@@ -17,10 +17,18 @@ jobs:
       - name: Install Kaggle CLI
         run: pip install kaggle
 
+      # - name: Setup Kaggle API
+      #   run: |
+      #     mkdir -p ~/.kaggle
+      #     echo "${{ secrets.KAGGLE_JSON }}" > ~/.kaggle/kaggle.json
+      #     chmod 600 ~/.kaggle/kaggle.json
       - name: Setup Kaggle API
+        shell: bash
         run: |
           mkdir -p ~/.kaggle
-          echo "${{ secrets.KAGGLE_JSON }}" > ~/.kaggle/kaggle.json
+          cat <<EOF > ~/.kaggle/kaggle.json
+          ${{ secrets.KAGGLE_JSON }}
+          EOF
           chmod 600 ~/.kaggle/kaggle.json
 
       - name: Push Kaggle notebook
