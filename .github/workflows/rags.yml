@@ -21,7 +21,7 @@ jobs:
         run: |
           mkdir -p ~/.kaggle
           echo "${{ secrets.SECRET_TOKEN }}" > ~/.kaggle/access_token
-          echo "${{ secrets.SECRET_TOKEN }}"
+          cat ~/.kaggle/access_token
           chmod 600 ~/.kaggle/access_token
 
       - name: Push Kaggle notebook
@@ -36,7 +36,7 @@ jobs:
           sleep 200
 
           while true; do
-            STATUS=$(kaggle kernels status "$NOTEBOOK" | grep -i "status" | awk '{print tolower($3)}')
+            STATUS=$(kaggle kernels status "$NOTEBOOK" | grep -i "status" | awk '{print tolower($4)}')
 
             echo "Current status: $STATUS"
 
