@@ -1,39 +1,86 @@
 name: Run Kaggle Contract RAG
 
 on:
-     workflow_dispatch:
+  #  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
-     run-kaggle:
-          runs-on: ubuntu-latest
+  run-kaggle:
+    runs-on: ubuntu-latest
 
-          steps:
-               - name: Checkout repo
-                 uses: actions/checkout@v4
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-               - name: Install Kaggle CLI
-                 run: pip install kaggle
+      - name: Install Kaggle CLI
+        run: pip install kaggle
 
-               - name: Setup Kaggle API
-                 run: |
-                      mkdir -p ~/.kaggle
-                      echo "${{ secrets.KAGGLE_JSON }}" > ~/.kaggle/kaggle.json
-                      chmod 600 ~/.kaggle/kaggle.json
+      - name: Setup Kaggle API
+        run: |
+          mkdir -p ~/.kaggle
+          echo "${{ secrets.KAGGLE_JSON }}" > ~/.kaggle/kaggle.json
+          chmod 600 ~/.kaggle/kaggle.json
 
-               - name: Push Kaggle notebook
-                 run: |
-                      kaggle kernels push -p contract-rag
+      - name: Push Kaggle notebook
+        run: |
+          kaggle kernels push -p contract-rag
 
-               - name: Wait for execution
-                 run: sleep 260
+      - name: Wait for Kaggle notebook completion
+        run: |
+          NOTEBOOK="deoussama/contract-rag"
 
-               - name: Fetch output
-                 run: |
-                      kaggle kernels output Oussama-SI/contract-rag -p output
+          echo "Waiting initial 260 seconds..."
+          sleep 260
 
-               - name: Extract ngrok URL
-                 run: |
-                      echo "NGROK_URL=$(cat output/ngrok_url.txt)" >> $GITHUB_ENV
+          while true; do
+            STATUS=$(kaggle kernels status "$NOTEBOOK" | grep -i "status" | awk '{print tolower($2)}')
 
-               - name: Show URL
-                 run: echo "Ngrok URL = ${{ env.NGROK_URL }}"
+            echo "Current status: $STATUS"
+
+            case "$STATUS" in
+              complete|completed|success)
+                echo "Notebook completed successfully."
+
+                kaggle kernels output "$NOTEBOOK" -p output
+
+                if [ -f output/ngrok_url.txt ]; then
+                  echo "NGROK_URL=$(cat output/ngrok_url.txt)" >> $GITHUB_ENV
+                else
+                  echo "ngrok_url.txt not found."
+                  exit 1
+                fi
+
+                exit 0
+                ;;
+
+              running)
+                echo "Notebook still running. Waiting 10 seconds..."
+                sleep 10
+                ;;
+
+              error|failed)
+                echo "Notebook failed."
+
+                kaggle kernels output "$NOTEBOOK" -p output || true
+
+                if [ -f output/logs.txt ]; then
+                  echo "========== Last 50 lines of logs =========="
+                  tail -50 output/logs.txt
+                  echo "==========================================="
+                fi
+
+                exit 1
+                ;;
+
+              *)
+                echo "Unexpected status: $STATUS"
+                sleep 10
+                ;;
+            esac
+          done
+
+      - name: Show URL
+        if: ${{ success() && env.NGROK_URL != '' }}
+        run: echo "Ngrok URL = ${{ env.NGROK_URL }}"
