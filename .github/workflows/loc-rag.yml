@@ -14,27 +14,29 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Install Kaggle CLI
-        run: pip install kaggle
+        run: |
+          python -m pip install --upgrade pip
+          pip install kaggle
 
-      - name: Configure Kaggle token
+      - name: Configure Kaggle credentials
         run: |
           mkdir -p ~/.kaggle
-          echo "${{ secrets.SECRET_TOKEN }}" > ~/.kaggle/access_token
-          chmod 600 ~/.kaggle/access_token
+          echo '${{ secrets.KAGGLE_JSON_AZIZ }}' > ~/.kaggle/kaggle.json
+          chmod 600 ~/.kaggle/kaggle.json
 
-      - name: Push Kaggle notebook
+      - name: Push notebook to Kaggle
         run: |
           kaggle kernels push -p ai-juriste-loc
 
-      - name: Wait for Kaggle notebook completion
+      - name: Wait for notebook completion
         run: |
           NOTEBOOK="azizndiaye/ai-juriste-lois-ngrok"
 
-          echo "Waiting 200 seconds..."
+          echo "Waiting 200 seconds before checking status..."
           sleep 200
 
           while true; do
@@ -47,14 +49,16 @@ jobs:
 
               complete|completed|success)
 
-                echo "Notebook completed."
+                echo "Notebook completed successfully."
 
+                mkdir -p output
                 kaggle kernels output "$NOTEBOOK" -p output
 
                 if [ -f output/ngrok_url.txt ]; then
                   echo "NGROK_URL=$(cat output/ngrok_url.txt)" >> $GITHUB_ENV
                 else
-                  echo "ngrok_url.txt not found."
+                  echo "❌ ngrok_url.txt not found."
+                  ls -R output
                   exit 1
                 fi
 
@@ -69,16 +73,23 @@ jobs:
 
               error|failed)
 
-                echo "Notebook failed."
+                echo "Notebook execution failed."
 
+                mkdir -p output
                 kaggle kernels output "$NOTEBOOK" -p output || true
+
+                if [ -f output/logs.txt ]; then
+                  echo "========== Logs =========="
+                  tail -100 output/logs.txt
+                  echo "=========================="
+                fi
 
                 exit 1
                 ;;
 
               *)
 
-                echo "Unknown status: $STATUS"
+                echo "Unexpected status: $STATUS"
                 sleep 10
                 ;;
 
@@ -86,6 +97,11 @@ jobs:
 
           done
 
-      - name: Show URL
+      - name: Display Ngrok URL
         if: ${{ success() && env.NGROK_URL != '' }}
-        run: echo "Ngrok URL = ${{ env.NGROK_URL }}"
+        run: |
+          echo "====================================="
+          echo "Ngrok URL : $NGROK_URL"
+          echo "Swagger   : $NGROK_URL/docs"
+          echo "Health    : $NGROK_URL/health"
+          echo "====================================="
