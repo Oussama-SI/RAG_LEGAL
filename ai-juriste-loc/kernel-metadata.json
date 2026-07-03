@@ -1,1 +1,8 @@
-
+{
+  "id": "azizndiaye/ai-juriste-loc",
+  "title": "AI Juriste LOC",
+  "code_file": "ai-juriste-lois-ngrok.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "accelerator": "gpu"
+}
