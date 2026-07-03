@@ -1,6 +1,6 @@
 {
-  "id": "azizndiaye/ai-juriste-loc",
-  "title": "AI Juriste LOC",
+  "id": "azizndiaye/ai-juriste-lois-ngrok",
+  "title": "ai-juriste-lois-ngrok",
   "code_file": "ai-juriste-lois-ngrok.ipynb",
   "language": "python",
   "kernel_type": "notebook",
