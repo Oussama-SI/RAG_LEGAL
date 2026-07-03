@@ -1,1 +1,91 @@
+name: Run Kaggle AI Juriste LOC
 
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+    paths:
+      - "ai-juriste-loc/**"
+
+jobs:
+  run-kaggle:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Install Kaggle CLI
+        run: pip install kaggle
+
+      - name: Configure Kaggle token
+        run: |
+          mkdir -p ~/.kaggle
+          echo "${{ secrets.SECRET_TOKEN }}" > ~/.kaggle/access_token
+          chmod 600 ~/.kaggle/access_token
+
+      - name: Push Kaggle notebook
+        run: |
+          kaggle kernels push -p ai-juriste-loc
+
+      - name: Wait for Kaggle notebook completion
+        run: |
+          NOTEBOOK="azizndiaye/ai-juriste-lois-ngrok"
+
+          echo "Waiting 200 seconds..."
+          sleep 200
+
+          while true; do
+
+            STATUS=$(kaggle kernels status "$NOTEBOOK" | grep -i "status" | awk '{print tolower($4)}')
+
+            echo "Current status: $STATUS"
+
+            case "$STATUS" in
+
+              complete|completed|success)
+
+                echo "Notebook completed."
+
+                kaggle kernels output "$NOTEBOOK" -p output
+
+                if [ -f output/ngrok_url.txt ]; then
+                  echo "NGROK_URL=$(cat output/ngrok_url.txt)" >> $GITHUB_ENV
+                else
+                  echo "ngrok_url.txt not found."
+                  exit 1
+                fi
+
+                exit 0
+                ;;
+
+              running)
+
+                echo "Notebook still running..."
+                sleep 10
+                ;;
+
+              error|failed)
+
+                echo "Notebook failed."
+
+                kaggle kernels output "$NOTEBOOK" -p output || true
+
+                exit 1
+                ;;
+
+              *)
+
+                echo "Unknown status: $STATUS"
+                sleep 10
+                ;;
+
+            esac
+
+          done
+
+      - name: Show URL
+        if: ${{ success() && env.NGROK_URL != '' }}
+        run: echo "Ngrok URL = ${{ env.NGROK_URL }}"
