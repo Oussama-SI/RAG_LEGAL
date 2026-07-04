@@ -28,28 +28,55 @@ jobs:
         run: |
           kaggle kernels push -p contract-rag
 
-      - name: Wait for Kaggle notebook completion
+            - name: Wait for notebook completion
+        shell: bash
         run: |
-          NOTEBOOK="deoussama/contract-rag"
+          set -euo pipefail
 
-          echo "Waiting initial 260 seconds..."
+          NOTEBOOK="azizndiaye/ai-juriste-lois-ngrok"
+
+          echo "Waiting 200 seconds before checking status..."
           sleep 200
 
           while true; do
-            STATUS=$(kaggle kernels status "$NOTEBOOK" | grep -i "status" | awk '{print tolower($4)}')
+
+            echo "========== RAW STATUS =========="
+            kaggle kernels status "$NOTEBOOK"
+            echo "================================"
+
+            STATUS=$(kaggle kernels status "$NOTEBOOK" \
+              | grep -i "status" \
+              | awk '{print tolower($4)}' \
+              | sed 's/^kernelworkerstatus\.//')
 
             echo "Current status: $STATUS"
 
             case "$STATUS" in
+
               complete|completed|success)
+
                 echo "Notebook completed successfully."
 
+                mkdir -p output
                 kaggle kernels output "$NOTEBOOK" -p output
 
+                echo "Downloaded files:"
+                ls -lah output
+
                 if [ -f output/ngrok_url.txt ]; then
-                  echo "NGROK_URL=$(cat output/ngrok_url.txt)" >> $GITHUB_ENV
+                  NGROK_URL=$(cat output/ngrok_url.txt)
+
+                  echo "NGROK_URL=$NGROK_URL" >> "$GITHUB_ENV"
+
+                  echo ""
+                  echo "====================================="
+                  echo "Ngrok URL : $NGROK_URL"
+                  echo "Swagger   : $NGROK_URL/docs"
+                  echo "Health    : $NGROK_URL/health"
+                  echo "====================================="
+
                 else
-                  echo "ngrok_url.txt not found."
+                  echo "ERROR: ngrok_url.txt not found."
                   exit 1
                 fi
 
@@ -57,31 +84,41 @@ jobs:
                 ;;
 
               running)
-                echo "Notebook still running. Waiting 10 seconds..."
-                sleep 10
+
+                echo "Notebook still running..."
+                sleep 20
                 ;;
 
               error|failed)
-                echo "Notebook failed."
 
+                echo "Notebook execution failed."
+
+                mkdir -p output
                 kaggle kernels output "$NOTEBOOK" -p output || true
 
+                echo ""
+                echo "Downloaded files:"
+                ls -lah output || true
+
                 if [ -f output/logs.txt ]; then
-                  echo "========== Last 50 lines of logs =========="
-                  tail -50 output/logs.txt
-                  echo "==========================================="
+                  echo ""
+                  echo "========== LAST 100 LOG LINES =========="
+                  tail -100 output/logs.txt
+                  echo "========================================"
                 fi
 
                 exit 1
                 ;;
 
               *)
-                echo "Unexpected status: $STATUS"
-                sleep 10
-                ;;
-            esac
-          done
 
+                echo "Unknown status: $STATUS"
+                sleep 20
+                ;;
+
+            esac
+
+          done
       - name: Show URL
         if: ${{ success() && env.NGROK_URL != '' }}
         run: echo "Ngrok URL = ${{ env.NGROK_URL }}"
