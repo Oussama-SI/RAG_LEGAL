@@ -32,6 +32,7 @@ fan-in dans draft).
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from typing import Optional, TypedDict
@@ -50,6 +51,14 @@ from rag_clients import (
     law_metrics,
     law_retrieve,
 )
+
+# ─── Logging ─────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("orchestrator")
 
 MAX_VALIDATION_ITER = 2
 DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
@@ -124,8 +133,6 @@ def _format_law_context(law_context: Optional[dict]) -> str:
         return "(لا توجد مقتضيات قانونية محددة مسترجعة)"
     parts = []
     for a in articles:
-        # meta peut contenir article_num (normalisé par rag_clients) ou
-        # d'autres champs selon les futures évolutions
         meta = a.get("meta") or {}
         ref = meta.get("article_num") or meta.get("chapter") or ""
         header = f"### الفصل {ref}" if ref else "### فصل"
@@ -186,7 +193,10 @@ def _build_draft_prompt(state: OrchestratorState) -> str:
 
 def intake_node(state: OrchestratorState) -> dict:
     contract_type = state.get("contract_type")
+    logger.info("▶ [intake] contract_type=%r", contract_type)
+
     if contract_type not in MOROCCAN_CONTRACT_INFO:
+        logger.error("[intake] Type de contrat inconnu : %r", contract_type)
         raise ValueError(f"Type de contrat inconnu : {contract_type!r}")
 
     required = get_required_fields(contract_type)
@@ -195,7 +205,9 @@ def intake_node(state: OrchestratorState) -> dict:
     while True:
         missing = [k for k in required if not party_info.get(k)]
         if not missing:
+            logger.info("[intake] Tous les champs requis sont présents : %s", list(required.keys()))
             break
+        logger.warning("[intake] Champs manquants → interruption : %s", missing)
         provided = interrupt(
             {
                 "type": "missing_fields",
@@ -204,6 +216,7 @@ def intake_node(state: OrchestratorState) -> dict:
             }
         )
         party_info.update(provided or {})
+        logger.info("[intake] Champs reçus via resume : %s", list((provided or {}).keys()))
 
     return {
         "party_info": party_info,
@@ -216,11 +229,11 @@ def intake_node(state: OrchestratorState) -> dict:
 def law_agent_node(state: OrchestratorState) -> dict:
     """
     Interroge POST /ask sur l'API lois (ai-juriste-lois-ngrok.ipynb).
-    rag_clients.law_retrieve() normalise la réponse vers
-    {articles:[{text, meta:{article_num}, score}], mandatory_clauses:[], total}.
-    En cas d'échec (ngrok mort, kernel éteint…) : dégradation propre,
-    l'orchestrateur continue sans contexte juridique réel.
+    En cas d'échec : dégradation propre, l'orchestrateur continue sans
+    contexte juridique réel.
     """
+    logger.info("▶ [law_agent] Appel POST /ask → %s", state.get("law_api_url"))
+    t0 = time.time()
     try:
         resp = law_retrieve(
             base_url=state["law_api_url"],
@@ -228,8 +241,15 @@ def law_agent_node(state: OrchestratorState) -> dict:
             case_context=state.get("party_info", {}),
             query=state.get("request_text", ""),
         )
+        n_articles = len(resp.get("articles", []))
+        hors_scope = resp.get("hors_scope", False)
+        logger.info(
+            "[law_agent] ✓ %.2fs — %d article(s) récupéré(s) — hors_scope=%s",
+            time.time() - t0, n_articles, hors_scope,
+        )
         return {"law_context": resp, "law_warning": None}
     except RagApiError as e:
+        logger.warning("[law_agent] ✗ %.2fs — RagApiError : %s", time.time() - t0, e)
         return {"law_context": {}, "law_warning": str(e)}
 
 
@@ -240,6 +260,8 @@ def contract_agent_node(state: OrchestratorState) -> dict:
     """
     info = MOROCCAN_CONTRACT_INFO.get(state["contract_type"], {})
     query = state.get("request_text") or info.get("title", state["contract_type"])
+    logger.info("▶ [contract_agent] Appel POST /retrieve → %s  (query=%r)", state.get("contract_api_url"), query[:60])
+    t0 = time.time()
     try:
         resp = contract_retrieve(
             base_url=state["contract_api_url"],
@@ -247,33 +269,42 @@ def contract_agent_node(state: OrchestratorState) -> dict:
             contract_type=state["contract_type"],
             n=5,
         )
+        n_chunks = len(resp.get("chunks", []))
+        logger.info("[contract_agent] ✓ %.2fs — %d chunk(s) récupéré(s)", time.time() - t0, n_chunks)
         return {"contract_examples": resp, "contract_warning": None}
     except RagApiError as e:
+        logger.warning("[contract_agent] ✗ %.2fs — RagApiError : %s", time.time() - t0, e)
         return {"contract_examples": {}, "contract_warning": str(e)}
 
 
 def draft_node(state: OrchestratorState) -> dict:
     """Compose le contrat via Groq à partir des deux contextes RAG."""
+    iteration = state.get("iteration", 0) + 1
+    logger.info("▶ [draft] Itération %d — appel Groq (%s)", iteration, DEFAULT_GROQ_MODEL)
+    t0 = time.time()
     llm = get_llm(state["groq_api_key"])
     prompt = _build_draft_prompt(state)
     resp = llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
+    draft_text = resp.content.strip()
+    logger.info("[draft] ✓ %.2fs — %d caractères générés", time.time() - t0, len(draft_text))
     return {
-        "draft": resp.content.strip(),
-        "iteration": state.get("iteration", 0) + 1,
+        "draft": draft_text,
+        "iteration": iteration,
     }
 
 
 def validate_node(state: OrchestratorState) -> dict:
     """Relit le brouillon et vérifie la conformité aux clauses/articles."""
+    logger.info("▶ [validate] Itération %d — vérification conformité", state.get("iteration", 0))
+    t0 = time.time()
     info = MOROCCAN_CONTRACT_INFO.get(state["contract_type"], {})
     mandatory_clauses = info.get("clauses", [])
 
-    # Numéros d'articles issus du RAG lois (champ normalisé article_num)
     mandatory_articles = [
         ref
         for a in (state.get("law_context") or {}).get("articles", [])
         if (ref := (a.get("meta") or {}).get("article_num"))
-        and ref  # ignorer les chaînes vides
+        and ref
     ]
 
     llm = get_llm(state["groq_api_key"], temperature=0.0)
@@ -291,56 +322,79 @@ def validate_node(state: OrchestratorState) -> dict:
 
     resp = llm.invoke([HumanMessage(content=check_prompt)])
     parsed = _parse_json_safe(resp.content)
+    passed = bool(parsed.get("conforme", True))
+    issues = parsed.get("clauses_manquantes") or []
+
+    if passed:
+        logger.info("[validate] ✓ %.2fs — Conforme", time.time() - t0)
+    else:
+        logger.warning("[validate] ✗ %.2fs — Non conforme — clauses manquantes : %s", time.time() - t0, issues)
+
     return {
-        "validation_passed": bool(parsed.get("conforme", True)),
-        "validation_issues": parsed.get("clauses_manquantes") or [],
+        "validation_passed": passed,
+        "validation_issues": issues,
     }
 
 
 def route_after_validate(state: OrchestratorState) -> str:
-    if state.get("validation_passed") or state.get("iteration", 0) >= MAX_VALIDATION_ITER:
-        return "done"
-    return "retry"
+    iteration = state.get("iteration", 0)
+    if state.get("validation_passed") or iteration >= MAX_VALIDATION_ITER:
+        route = "done"
+        reason = "conforme" if state.get("validation_passed") else f"max itérations ({MAX_VALIDATION_ITER}) atteint"
+        logger.info("[route_after_validate] → finalize (%s)", reason)
+    else:
+        route = "retry"
+        logger.info("[route_after_validate] → draft (retry, itération %d)", iteration)
+    return route
 
 
 def finalize_node(state: OrchestratorState) -> dict:
     """
     Agrège métriques d'orchestration + métriques RAG pour Streamlit.
-
-    ⚠️  contract-rag.ipynb n'expose pas GET /metrics → RagApiError capturée.
-        ai-juriste-lois-ngrok.ipynb expose GET /metrics → ok si kernel actif.
     """
+    elapsed = round(time.time() - state.get("started_at", time.time()), 1)
+    logger.info("▶ [finalize] Contrat finalisé — %d itération(s) — %.1fs", state.get("iteration", 0), elapsed)
+
     metrics: dict = {
         "iterations": state.get("iteration", 0),
         "validation_passed": state.get("validation_passed"),
-        "elapsed_seconds": round(time.time() - state.get("started_at", time.time()), 1),
+        "elapsed_seconds": elapsed,
         "law_warning": state.get("law_warning"),
         "contract_warning": state.get("contract_warning"),
-        # Infos supplémentaires remontées par law_retrieve()
         "law_hors_scope": (state.get("law_context") or {}).get("hors_scope", False),
         "law_articles_count": len((state.get("law_context") or {}).get("articles", [])),
         "contract_chunks_count": len((state.get("contract_examples") or {}).get("chunks", [])),
     }
 
-    # Métriques API lois (disponibles)
+    # Métriques API lois
     try:
         metrics["law_rag"] = law_metrics(state["law_api_url"])
+        logger.info("[finalize] Métriques API lois récupérées")
     except RagApiError as e:
         metrics["law_rag"] = {"error": str(e)}
+        logger.warning("[finalize] Métriques API lois indisponibles : %s", e)
 
-    # Métriques API contrats (non exposées par contract-rag.ipynb)
+    # Métriques API contrats (endpoint non exposé par contract-rag.ipynb)
     try:
         metrics["contract_rag"] = contract_metrics(state["contract_api_url"])
+        logger.info("[finalize] Métriques API contrats récupérées")
     except RagApiError:
-        # Endpoint absent du notebook — comportement attendu, pas une erreur
         metrics["contract_rag"] = {"note": "endpoint /metrics non exposé par contract-rag.ipynb"}
+        logger.debug("[finalize] /metrics absent de contract-rag.ipynb (comportement attendu)")
 
+    logger.info(
+        "[finalize] ✓ Terminé — validation=%s  articles_loi=%d  chunks_contrat=%d",
+        metrics["validation_passed"],
+        metrics["law_articles_count"],
+        metrics["contract_chunks_count"],
+    )
     return {"final_contract": state.get("draft", ""), "metrics": metrics}
 
 
 # ─── Construction du graphe ──────────────────────────────────────────────────
 
 def build_graph(checkpointer=None):
+    logger.info("Construction du graphe LangGraph...")
     graph = StateGraph(OrchestratorState)
     graph.add_node("intake", intake_node)
     graph.add_node("law_agent", law_agent_node)
@@ -350,10 +404,8 @@ def build_graph(checkpointer=None):
     graph.add_node("finalize", finalize_node)
 
     graph.add_edge(START, "intake")
-    # Fan-out parallèle : law_agent et contract_agent tournent en même temps
     graph.add_edge("intake", "law_agent")
     graph.add_edge("intake", "contract_agent")
-    # Fan-in : draft attend les deux
     graph.add_edge("law_agent", "draft")
     graph.add_edge("contract_agent", "draft")
     graph.add_edge("draft", "validate")
@@ -364,15 +416,15 @@ def build_graph(checkpointer=None):
     )
     graph.add_edge("finalize", END)
 
-    return graph.compile(checkpointer=checkpointer or MemorySaver())
+    compiled = graph.compile(checkpointer=checkpointer or MemorySaver())
+    logger.info("Graphe compilé ✓")
+    return compiled
 
 
 # ─── Façade pour Streamlit ───────────────────────────────────────────────────
 
 class ContractOrchestrator:
-    """Point d'entrée unique pour Streamlit.
-    La mémoire par session est isolée via thread_id (uuid dans st.session_state).
-    """
+    """Point d'entrée unique pour Streamlit."""
 
     def __init__(
         self,
@@ -385,6 +437,11 @@ class ContractOrchestrator:
         self.contract_api_url = contract_api_url
         self.groq_api_key = groq_api_key
         self.graph = build_graph(checkpointer)
+        logger.info(
+            "ContractOrchestrator initialisé — law_api=%s  contract_api=%s",
+            law_api_url or "(non défini)",
+            contract_api_url or "(non défini)",
+        )
 
     def start(
         self,
@@ -393,6 +450,10 @@ class ContractOrchestrator:
         contract_type: str,
         party_info: Optional[dict] = None,
     ) -> dict:
+        logger.info(
+            "start() — thread_id=%s  contract_type=%r  party_info_keys=%s",
+            thread_id, contract_type, list((party_info or {}).keys()),
+        )
         config = {"configurable": {"thread_id": thread_id}}
         initial_state: OrchestratorState = {
             "request_text": request_text,
@@ -403,17 +464,23 @@ class ContractOrchestrator:
             "groq_api_key": self.groq_api_key,
         }
         result = self.graph.invoke(initial_state, config=config)
-        return self._format_result(result)
+        formatted = self._format_result(result)
+        logger.info("start() → status=%r", formatted.get("status"))
+        return formatted
 
     def resume(self, thread_id: str, provided_fields: dict) -> dict:
+        logger.info("resume() — thread_id=%s  provided_keys=%s", thread_id, list(provided_fields.keys()))
         config = {"configurable": {"thread_id": thread_id}}
         result = self.graph.invoke(Command(resume=provided_fields), config=config)
-        return self._format_result(result)
+        formatted = self._format_result(result)
+        logger.info("resume() → status=%r", formatted.get("status"))
+        return formatted
 
     @staticmethod
     def _format_result(result: dict) -> dict:
         if result.get("__interrupt__"):
             payload = result["__interrupt__"][0].value
+            logger.info("_format_result → needs_input  missing=%s", list(payload.get("fields", {}).keys()))
             return {"status": "needs_input", **payload}
         return {
             "status": "done",
