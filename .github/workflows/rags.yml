@@ -21,8 +21,8 @@ jobs:
         run: |
           mkdir -p ~/.kaggle
           echo "${{ secrets.SECRET_TOKEN }}" > ~/.kaggle/access_token
-          cat ~/.kaggle/access_token
           chmod 600 ~/.kaggle/access_token
+          cat ~/.kaggle/access_token
 
       - name: Push Kaggle notebook
         run: |
@@ -33,7 +33,7 @@ jobs:
           NOTEBOOK="deoussama/contract-rag"
 
           echo "Waiting initial 260 seconds..."
-          sleep 200
+          sleep 120
 
           while true; do
             STATUS=$(kaggle kernels status "$NOTEBOOK" | grep -i "status" | awk '{print tolower($4)}')
