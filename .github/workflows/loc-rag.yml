@@ -1,0 +1,133 @@
+name: Run Kaggle AI Juriste LOC
+
+on:
+  workflow_dispatch:
+
+  push:
+    branches:
+      - main
+    paths:
+      - "ai-juriste-loc/**"
+
+jobs:
+  run-kaggle:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Kaggle CLI
+        run: |
+          python -m pip install --upgrade pip
+          pip install kaggle
+
+      - name: Configure Kaggle credentials
+        run: |
+          mkdir -p ~/.kaggle
+          echo '${{ secrets.KAGGLE_JSON_AZIZ }}' > ~/.kaggle/kaggle.json
+          chmod 600 ~/.kaggle/kaggle.json
+
+      - name: Push notebook to Kaggle
+        run: |
+          kaggle kernels push -p ai-juriste-loc
+
+      - name: Wait for notebook completion
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NOTEBOOK="azizndiaye/ai-juriste-lois-ngrok"
+
+          echo "Waiting 200 seconds before checking status..."
+          sleep 200
+
+          while true; do
+
+            echo "========== RAW STATUS =========="
+            kaggle kernels status "$NOTEBOOK"
+            echo "================================"
+
+            STATUS=$(kaggle kernels status "$NOTEBOOK" \
+              | grep -i "status" \
+              | awk '{print tolower($4)}' \
+              | sed 's/^kernelworkerstatus\.//')
+
+            echo "Current status: $STATUS"
+
+            case "$STATUS" in
+
+              complete|completed|success)
+
+                echo "Notebook completed successfully."
+
+                mkdir -p output
+                kaggle kernels output "$NOTEBOOK" -p output
+
+                echo "Downloaded files:"
+                ls -lah output
+
+                if [ -f output/ngrok_url.txt ]; then
+                  NGROK_URL=$(cat output/ngrok_url.txt)
+
+                  echo "NGROK_URL=$NGROK_URL" >> "$GITHUB_ENV"
+
+                  echo ""
+                  echo "====================================="
+                  echo "Ngrok URL : $NGROK_URL"
+                  echo "Swagger   : $NGROK_URL/docs"
+                  echo "Health    : $NGROK_URL/health"
+                  echo "====================================="
+
+                else
+                  echo "ERROR: ngrok_url.txt not found."
+                  exit 1
+                fi
+
+                exit 0
+                ;;
+
+              running)
+
+                echo "Notebook still running..."
+                sleep 20
+                ;;
+
+              error|failed)
+
+                echo "Notebook execution failed."
+
+                mkdir -p output
+                kaggle kernels output "$NOTEBOOK" -p output || true
+
+                echo ""
+                echo "Downloaded files:"
+                ls -lah output || true
+
+                if [ -f output/logs.txt ]; then
+                  echo ""
+                  echo "========== LAST 100 LOG LINES =========="
+                  tail -100 output/logs.txt
+                  echo "========================================"
+                fi
+
+                exit 1
+                ;;
+
+              *)
+
+                echo "Unknown status: $STATUS"
+                sleep 20
+                ;;
+
+            esac
+
+          done
+      - name: Display Ngrok URL
+        if: ${{ success() && env.NGROK_URL != '' }}
+        run: |
+          echo "====================================="
+          echo "Ngrok URL : $NGROK_URL"
+          echo "Swagger   : $NGROK_URL/docs"
+          echo "Health    : $NGROK_URL/health"
+          echo "====================================="

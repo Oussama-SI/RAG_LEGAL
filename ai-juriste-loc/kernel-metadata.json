@@ -1,0 +1,11 @@
+{
+  "id": "azizndiaye/ai-juriste-lois-ngrok",
+  "title": "ai-juriste-lois-ngrok",
+  "code_file": "ai-juriste-lois-ngrok.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "accelerator": "gpu",
+  "dataset_sources": ["azizndiaye/lois-ma"],
+  "enable_internet": true,
+  "enable_gpu": true
+}

@@ -2,6 +2,7 @@ name: Run Kaggle Contract RAG
 
 on:
   workflow_dispatch:
+
   push:
     branches:
       - main
@@ -84,4 +85,5 @@ jobs:
 
       - name: Show URL
         if: ${{ success() && env.NGROK_URL != '' }}
-        run: echo "Ngrok URL = ${{ env.NGROK_URL }}"
+        run: |
+          echo "Ngrok URL = ${{ env.NGROK_URL }}"
