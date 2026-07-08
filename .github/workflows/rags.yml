@@ -37,7 +37,11 @@ jobs:
           sleep 120
 
           while true; do
-            STATUS=$(kaggle kernels status "$NOTEBOOK" | grep -i "status" | awk '{print tolower($4)}')
+            # STATUS=$(kaggle kernels status "$NOTEBOOK" | grep -i "status" | awk '{print tolower($4)}')
+            STATUS=$(kaggle kernels status "$NOTEBOOK" \
+              | grep -i "status" \
+              | awk '{print tolower($4)}' \
+              | sed 's/^kernelworkerstatus\.//')
 
             echo "Current status: $STATUS"
 
