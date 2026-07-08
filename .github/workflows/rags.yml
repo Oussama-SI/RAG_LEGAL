@@ -33,7 +33,7 @@ jobs:
         run: |
           NOTEBOOK="deoussama/contract-rag"
 
-          echo "Waiting initial 260 seconds..."
+          echo "Waiting initial 120 seconds..."
           sleep 120
 
           while true; do
@@ -42,7 +42,7 @@ jobs:
             echo "Current status: $STATUS"
 
             case "$STATUS" in
-              complete|completed|success)
+              complete|kernelworkerstatus.complete|success)
                 echo "Notebook completed successfully."
 
                 kaggle kernels output "$NOTEBOOK" -p output
