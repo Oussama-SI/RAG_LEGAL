@@ -42,7 +42,7 @@ jobs:
             echo "Current status: $STATUS"
 
             case "$STATUS" in
-              complete|kernelworkerstatus.complete|success)
+              kernelworkerstatus.complete|"kernelworkerstatus.complete")
                 echo "Notebook completed successfully."
 
                 kaggle kernels output "$NOTEBOOK" -p output
