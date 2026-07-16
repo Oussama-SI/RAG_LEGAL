@@ -17,6 +17,14 @@ c'est une copie locale à ajuster si besoin.
 from __future__ import annotations
 
 # ─── Référentiel des types de contrats marocains ──────────────────────────
+# ⚠️ Ce dictionnaire ne sert QUE de métadonnées structurelles pour l'UI et le
+# squelette de rédaction (titre, parties, clauses attendues, icône). Il ne
+# doit JAMAIS servir de source de droit : les références légales réellement
+# citées dans le contrat (numéros de فصل, texte des articles) proviennent
+# exclusivement du RAG juridique via law_retrieve() (POST /ask). Le champ
+# 'law' ci-dessous n'est qu'une étiquette indicative affichée à l'utilisateur
+# (ex. dans l'UI Streamlit), jamais injectée comme vérité juridique dans le
+# prompt de rédaction — voir _build_draft_prompt() dans orchestrator.py.
 MOROCCAN_CONTRACT_INFO = {
     'عقد_إيجار': {
         'title': 'عقد كراء سكني',

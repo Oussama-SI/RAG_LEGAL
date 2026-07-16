@@ -128,7 +128,9 @@ def _format_law_context(law_context: Optional[dict]) -> str:
     Formate les articles du ق.ل.ع récupérés via law_retrieve().
     law_context["articles"] = [{text, meta:{article_num}, score}]
     """
-    articles = (law_context or {}).get("articles", [])[:6]
+    # On ne garde que les 3 articles les plus pertinents (déjà classés par
+    # score décroissant côté API /ask — voir law_retrieve()).
+    articles = (law_context or {}).get("articles", [])[:3]
     if not articles:
         return "(لا توجد مقتضيات قانونية محددة مسترجعة)"
     parts = []
@@ -168,7 +170,7 @@ def _build_draft_prompt(state: OrchestratorState) -> str:
         )
 
     return f"""## نوع العقد: {info.get('title', state['contract_type'])}
-## القانون المغربي المنطبق: {info.get('law', 'القانون المدني المغربي')}
+## الإطار القانوني العام (مرجع إرشادي فقط): {info.get('law', 'القانون المدني المغربي')}
 
 ## أطراف العقد:
 {parties_list}
@@ -179,14 +181,14 @@ def _build_draft_prompt(state: OrchestratorState) -> str:
 ## البنود الإلزامية الواجب تضمينها:
 {clauses_list}
 
-## مقتضيات قانونية ملزمة مسترجعة من ظهير الالتزامات والعقود (ق.ل.ع):
+## المقتضيات القانونية الملزمة (المصدر القانوني الوحيد المعتمد — أهم 3 فصول من ظهير الالتزامات والعقود مسترجعة عبر الوكيل القانوني):
 {law_section}
 
 ## أمثلة مرجعية من عقود مغربية فعلية:
 {_format_examples(state.get("contract_examples"))}
 {feedback}
 
-اكتب العقد القانوني المغربي الكامل والمفصّل مع جميع البنود، باحترام صارم للمقتضيات القانونية أعلاه:"""
+اكتب العقد القانوني المغربي الكامل والمفصّل مع جميع البنود. استند حصرياً، في أي إحالة إلى فصول أو مقتضيات قانونية داخل نص العقد، إلى الفصول الثلاثة المذكورة أعلاه في قسم "المقتضيات القانونية الملزمة" — لا تخترع أو تستنتج أرقام فصول أخرى من عندك. الإطار القانوني العام المذكور أعلاه هو مجرد سياق تعريفي، وليس مصدراً يُستشهد بأرقام فصوله:"""
 
 
 # ─── Nœuds du graphe ─────────────────────────────────────────────────────────
@@ -240,6 +242,7 @@ def law_agent_node(state: OrchestratorState) -> dict:
             contract_type=state["contract_type"],
             case_context=state.get("party_info", {}),
             query=state.get("request_text", ""),
+            n=3,  # on ne demande que les 3 articles les plus pertinents (score le plus haut)
         )
         n_articles = len(resp.get("articles", []))
         hors_scope = resp.get("hors_scope", False)

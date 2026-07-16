@@ -13,7 +13,7 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from chat_agent import build_request_text, new_chat_state, process_user_turn
 from contract_config import MOROCCAN_CONTRACT_INFO, get_required_fields
-from docx_export import contract_to_docx_bytes
+from docx_export import contract_to_docx_bytes, format_contract_html
 from orchestrator import ContractOrchestrator
 from rag_clients import RagApiError, contract_health, law_health
 
@@ -38,12 +38,43 @@ st.markdown("""
   html, body, [class*="css"] { direction: rtl; }
   .main { background: #f7f5f0; }
   h1, h2, h3 { color: #F77C00 !important; }
+
+  /* ── Boîte du contrat : fond blanc + texte NOIR explicite ──────────────
+     (sans ce color explicite, le texte hérite du blanc en thème sombre
+     Streamlit et devient invisible sur fond blanc). */
   .contract-box {
-    background: white; border: 1px solid #d0c8b8; border-radius: 12px;
-    padding: 2rem; font-size: 1.05rem; line-height: 2;
-    direction: rtl; text-align: right; white-space: pre-wrap;
+    background: #ffffff !important;
+    color: #1a1a1a !important;
+    border: 1px solid #d0c8b8; border-radius: 12px;
+    padding: 2rem 2.5rem; font-size: 1.05rem; line-height: 2;
+    direction: rtl; text-align: right;
     box-shadow: 0 4px 20px rgba(0,0,0,0.06);
   }
+  .contract-box * { color: inherit; }
+
+  /* ── Styles par type de ligne, alignés sur la mise en forme du .docx ─── */
+  .contract-article {
+    font-weight: 700;
+    color: #1a3a5c !important;
+    font-size: 1.15rem;
+    margin-top: 1rem;
+    margin-bottom: 0.3rem;
+  }
+  .contract-center {
+    font-weight: 700;
+    text-align: center;
+  }
+  .contract-signature {
+    color: #3c3c3c !important;
+    font-size: 0.95rem;
+  }
+  .contract-line {
+    margin: 0.15rem 0;
+  }
+  .contract-spacer {
+    height: 0.6rem;
+  }
+
   .badge { display: inline-block; padding: 0.2rem 0.8rem; border-radius: 20px;
            font-size: 0.8rem; font-weight: 600; margin: 0.2rem; }
   .badge-green  { background: #e8f5e9; color: #1a7a3c; }
@@ -235,7 +266,10 @@ if mode == "chat":
                 if metrics.get("contract_warning"):
                     st.info(f"ℹ️ وكيل الأمثلة: {metrics['contract_warning']}")
 
-                st.markdown(f'<div class="contract-box">{chat_result["contract"]}</div>', unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="contract-box">{format_contract_html(chat_result["contract"])}</div>',
+                    unsafe_allow_html=True,
+                )
 
                 ctype = chat_state.get("contract_type")
                 ctitle = MOROCCAN_CONTRACT_INFO.get(ctype, {}).get("title", "عقد")
@@ -378,7 +412,10 @@ else:
 
         # ── Contrat généré ────────────────────────────────────────────────────────
         st.markdown("### نص العقد")
-        st.markdown(f'<div class="contract-box">{result["contract"]}</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="contract-box">{format_contract_html(result["contract"])}</div>',
+            unsafe_allow_html=True,
+        )
 
         ctype = st.session_state.get("last_contract_type", contract_type)
         ctitle = MOROCCAN_CONTRACT_INFO.get(ctype, {}).get("title", "عقد")

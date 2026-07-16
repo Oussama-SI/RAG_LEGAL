@@ -5,8 +5,14 @@ Export du contrat final en .docx (RTL, arabe). Code repris tel quel depuis
 app_old.py (fonctions set_rtl / set_arabic_font / add_horizontal_line /
 contract_to_docx_bytes), simplement déplacé dans son propre module pour que
 app.py reste centré sur l'orchestration.
+
+Contient aussi format_contract_html(), qui applique la MÊME logique de mise
+en forme (article / ligne centrée / ligne de signature) que le docx, mais
+pour l'affichage HTML dans le dashboard Streamlit — afin que l'aperçu à
+l'écran corresponde au rendu du .docx téléchargé.
 """
 
+import html
 import io
 import re
 from datetime import datetime
@@ -154,26 +160,6 @@ def contract_to_docx_bytes(contract_text: str, title: str, contract_type: str) -
     add_horizontal_line(doc, color=(192, 160, 60), thickness='6')
     doc.add_paragraph()
 
-    # sig_table = doc.add_table(rows=4, cols=2)
-    # sig_table.style = 'Table Grid'
-
-    # for i, cell in enumerate(sig_table.rows[0].cells):
-    #     p = cell.paragraphs[0]
-    #     set_rtl(p)
-    #     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    #     r = p.add_run(['الطرف الأول', 'الطرف الثاني'][i])
-    #     set_arabic_font(r, size=12, bold=True, color=(26, 58, 92))
-
-    # labels = ['الاسم: ________________________________',
-    #           'التاريخ: _____________________________',
-    #           'التوقيع:\n\n\n']
-    # for row_i, label in enumerate(labels):
-    #     for cell in sig_table.rows[row_i + 1].cells:
-    #         p = cell.paragraphs[0]
-    #         set_rtl(p)
-    #         r = p.add_run(label)
-    #         set_arabic_font(r, size=10)
-
     footer = doc.sections[0].footer
     fp = footer.paragraphs[0]
     fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -187,3 +173,63 @@ def contract_to_docx_bytes(contract_text: str, title: str, contract_type: str) -
     doc.save(buf)
     buf.seek(0)
     return buf.getvalue()
+
+
+# ─── Aperçu HTML aligné sur le rendu du .docx ─────────────────────────────
+
+_SKIP_HEADERS = ['بسم الله الرحمن الرحيم', 'المملكة المغربية']
+
+_ARTICLE_RE = re.compile(r'^(البند|المادة|الفصل|أولاً|ثانياً|ثالثاً|رابعاً|خامساً)')
+
+
+def format_contract_html(contract_text: str) -> str:
+    """
+    Convertit le texte brut du contrat en HTML mis en forme (article en gras/
+    bleu, ligne centrée, ligne de signature grisée, etc.), en reprenant la
+    même logique de classification que contract_to_docx_bytes(), pour que
+    l'aperçu Streamlit corresponde au document .docx téléchargé.
+
+    Le texte est échappé (html.escape) avant insertion pour éviter tout
+    problème d'injection HTML si le contenu généré par le LLM contient des
+    caractères spéciaux (<, >, &...).
+    """
+    header_count = {h: 0 for h in _SKIP_HEADERS}
+    parts = []
+
+    for raw_line in contract_text.split('\n'):
+        line = raw_line.strip()
+
+        if not line:
+            parts.append('<div class="contract-spacer"></div>')
+            continue
+
+        skip = False
+        for h in _SKIP_HEADERS:
+            if h in line:
+                header_count[h] += 1
+                if header_count[h] > 1:
+                    skip = True
+                break
+        if skip:
+            continue
+
+        escaped = html.escape(line)
+
+        is_article = bool(_ARTICLE_RE.match(line))
+        is_center_line = any(kw in line for kw in ['عقد ', 'بسم الله', 'المملكة'])
+        is_signature_line = any(
+            kw in line for kw in ['الطرف الأول', 'الطرف الثاني', 'الاسم:', 'التوقيع:', 'التاريخ:']
+        )
+
+        if is_article:
+            cls = 'contract-article'
+        elif is_center_line:
+            cls = 'contract-center'
+        elif is_signature_line:
+            cls = 'contract-signature'
+        else:
+            cls = 'contract-line'
+
+        parts.append(f'<div class="{cls}">{escaped}</div>')
+
+    return ''.join(parts)

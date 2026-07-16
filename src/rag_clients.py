@@ -34,10 +34,16 @@ Endpoints réels :
 
 from __future__ import annotations
 
+import logging
+import re
+from typing import Optional
+
 import requests
 
 DEFAULT_TIMEOUT = 25
 DEFAULT_HEALTH_TIMEOUT = 8
+
+logger = logging.getLogger(__name__)
 
 
 class RagApiError(RuntimeError):
@@ -106,6 +112,94 @@ def contract_metrics(base_url: str) -> dict:
 
 # ─── API lois  (ai-juriste-lois-ngrok.ipynb) ────────────────────────────────
 
+# Questions juridiques génériques par type de contrat
+_CONTRACT_LEGAL_QUESTIONS = {
+    "عقد_إيجار": "ما هي شروط وأحكام عقد الكراء السكني في ظهير الالتزامات والعقود المغربي؟",
+    "عقد_بيع": "ما هي شروط عقد البيع وأحكامه في ظهير الالتزامات والعقود المغربي؟",
+    "عقد_عمل": "ما هي أحكام عقد الشغل في مدونة الشغل المغربية؟",
+    "عقد_شراكة": "ما هي أحكام عقد الشركة في القانون المغربي؟",
+    "عقد_مقاولة": "ما هي أحكام عقد المقاولة في ظهير الالتزامات والعقود المغربي؟",
+    "عقد_قرض": "ما هي أحكام عقد القرض في ظهير الالتزامات والعقود المغربي؟",
+    "عقد_كفالة": "ما هي شروط عقد الكفالة وأحكامه في ظهير الالتزامات والعقود المغربي؟",
+    "عقد_وكالة": "ما هي أحكام عقد الوكالة في ظهير الالتزامات والعقود المغربي؟",
+    "عقد_رهن": "ما هي أحكام عقد الرهن في ظهير الالتزامات والعقود المغربي؟",
+}
+
+# Mots-clés indiquant une question juridique (pour détection automatique)
+_LEGAL_KEYWORDS = [
+    "شروط", "أحكام", "حق", "التزام", "بطلان", "فسخ", "تعويض",
+    "مسؤولية", "أهلية", "قاصر", "ناقص", "ضمان", "كفالة",
+    "بيع", "شراء", "إيجار", "كراء", "قرض", "وكالة",
+    "الالتزامات", "العقود", "المادة", "الفصل", "ظهير",
+    "قانون", "مدونة", "نص", "مقتضى", "إجراء",
+]
+
+
+def _is_legal_question(text: str) -> bool:
+    """
+    Détecte si une requête est une question juridique ou une simple description.
+    """
+    if not text:
+        return False
+    # Vérifier la présence de mots-clés juridiques
+    text_lower = text.lower()
+    return any(kw in text_lower for kw in _LEGAL_KEYWORDS)
+
+
+def _build_legal_question(
+    contract_type: str,
+    query: str,
+    case_context: Optional[dict] = None,
+) -> str:
+    """
+    Construit une question juridique pertinente pour l'API Loi.
+    
+    Stratégie :
+    1. Si la requête utilisateur est une question juridique → l'utiliser
+    2. Sinon, utiliser une question générique basée sur le type de contrat
+    3. Ajouter des informations contextuelles utiles (parties, objet)
+    4. Limiter la longueur à 300 caractères maximum
+    """
+    # 1. Si c'est une question juridique, l'utiliser directement
+    if _is_legal_question(query):
+        question = query[:300]  # Limiter la longueur
+        logger.info(f"[law_retrieve] Question juridique détectée : {question[:100]}...")
+        return question
+    
+    # 2. Construire une question à partir du type de contrat
+    question = _CONTRACT_LEGAL_QUESTIONS.get(
+        contract_type,
+        f"ما هي الأحكام القانونية المتعلقة بعقد {contract_type} في ظهير الالتزامات والعقود المغربي؟"
+    )
+    
+    # 3. Ajouter le contexte utile (parties, objet) sans surcharger
+    context_parts = []
+    if case_context:
+        # Parties prenantes
+        parties = case_context.get("parties") or case_context.get("parties_names")
+        if parties and len(str(parties)) < 150:
+            context_parts.append(f"الأطراف: {parties}")
+        
+        # Objet du contrat (si ce n'est pas une adresse)
+        objet = case_context.get("object") or case_context.get("objet")
+        if objet and len(str(objet)) < 100:
+            # Vérifier que ce n'est pas une adresse
+            is_address = bool(re.search(r"(شارع|زنقة|طريق|عمارة|رقم|دار)", str(objet)))
+            if not is_address:
+                context_parts.append(f"الموضوع: {objet}")
+    
+    # 4. Ajouter les contextes utiles
+    if context_parts:
+        question = f"{question} — {' — '.join(context_parts)}"
+    
+    # 5. Limiter la longueur finale
+    if len(question) > 300:
+        question = question[:300]
+    
+    logger.info(f"[law_retrieve] Question construite : {question[:150]}...")
+    return question
+
+
 def law_health(base_url: str) -> dict:
     """
     GET /health
@@ -123,35 +217,42 @@ def law_retrieve(
 ) -> dict:
     """
     Interroge POST /ask et normalise la réponse vers le format
-    attendu par orchestrator.py :
+    attendu par orchestrator.py.
 
-      {
-        "articles": [
-          {"text": "...", "meta": {"article_num": "230"}, "score": 0.82}
-        ],
-        "mandatory_clauses": [],   # le pipeline lois ne les expose pas encore
-        "total": 3
-      }
-
-    La question envoyée combine : type de contrat + requête libre +
-    champs clés du contexte (parties, objet…).
+    La question envoyée est construite intelligemment :
+    - Si la requête utilisateur est une question juridique → l'utiliser
+    - Sinon, construire une question générique basée sur le type de contrat
+    - Ajouter les champs de contexte utiles (parties, objet) sans surcharger
     """
-    # Construire une question riche à partir du contexte disponible
-    question_parts = []
-    if contract_type:
-        question_parts.append(f"نوع العقد: {contract_type}")
-    if query:
-        question_parts.append(query)
-    # Ajouter les champs de contexte utiles (objet, parties…)
-    for key in ("objet", "object", "parties", "description"):
-        val = (case_context or {}).get(key)
-        if val:
-            question_parts.append(str(val))
-
-    question = " — ".join(question_parts) if question_parts else contract_type or "عقد"
-
+    # Construire la question juridique
+    question = _build_legal_question(
+        contract_type=contract_type,
+        query=query,
+        case_context=case_context,
+    )
+    
+    # Si la question est vide, utiliser une question générique
+    if not question:
+        question = "ما هي الأحكام العامة للعقود في ظهير الالتزامات والعقود المغربي؟"
+    
+    # Envoyer la requête
     payload: dict = {"question": question, "top_k": n}
-    raw = _post(base_url, "/ask", payload)
+    logger.info(f"[law_retrieve] Envoi à l'API Loi : {question[:100]}...")
+    
+    try:
+        raw = _post(base_url, "/ask", payload)
+    except RagApiError as e:
+        logger.error(f"[law_retrieve] Erreur API Loi : {e}")
+        # Retourner une réponse vide mais avec une structure valide
+        return {
+            "articles": [],
+            "mandatory_clauses": [],
+            "total": 0,
+            "hors_scope": True,
+            "question_id": "",
+            "temps_ecoule_s": 0.0,
+            "error": str(e),
+        }
 
     # ── Normalisation vers le format orchestrateur ──────────────────────────
     # Le notebook retourne :
@@ -187,3 +288,32 @@ def law_metrics(base_url: str) -> dict:
               avg_time_s, min_time_s, max_time_s, uptime_s, last_request_at}.
     """
     return _get(base_url, "/metrics")
+
+
+# ─── Fonctions utilitaires pour l'orchestrateur ──────────────────────────────
+
+def format_law_articles_for_prompt(articles: list, max_articles: int = 3) -> str:
+    """
+    Formate les articles juridiques pour le prompt de l'agent rédacteur.
+    """
+    if not articles:
+        return "(لا توجد مقتضيات قانونية محددة مسترجعة)"
+    
+    parts = []
+    for i, article in enumerate(articles[:max_articles], 1):
+        meta = article.get("meta", {})
+        ref = meta.get("article_num") or meta.get("chapter") or ""
+        text = article.get("text", "")
+        
+        if ref:
+            header = f"### الفصل {ref} من ظهير الالتزامات والعقود"
+        else:
+            header = f"### مقتضى قانوني {i}"
+        
+        # Tronquer le texte si trop long (2000 caractères max)
+        if len(text) > 2000:
+            text = text[:2000] + " [...]"
+        
+        parts.append(f"{header}\n{text}")
+    
+    return "\n\n".join(parts)
